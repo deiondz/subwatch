@@ -68,7 +68,7 @@ def write_reports(results: list[ProbeResult], output: Path, json_report: bool, c
 
 async def run_scan(
     domains: list[str], concurrency: int, timeout: float, console: Console,
-    show_all: bool, discovery_url: str,
+    show_all: bool, discovery_url: str, discovery_source: str, max_pages: int,
 ) -> list[ProbeResult]:
     results: list[ProbeResult] = []
     total = 0
@@ -91,7 +91,10 @@ async def run_scan(
             progress.console.print(result_line(item))
 
     with progress:
-        await scan(domains, concurrency, timeout, discovered, receive, discovery_url)
+        await scan(
+            domains, concurrency, timeout, discovered, receive,
+            discovery_url, discovery_source, max_pages,
+        )
         progress.update(task, description="Complete")
     return results
 
@@ -124,8 +127,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-color", action="store_true", help="disable colored output")
     parser.add_argument(
         "--discovery-url", default="https://crt.name/v1/search",
-        help="newline discovery API (use http://127.0.0.1:8787/v1/search for OpenCT)",
+        help="newline discovery API used by the 'api' source",
     )
+    parser.add_argument(
+        "--source", choices=("openct", "api"), default="openct",
+        help="CT discovery source (default: openct on-demand lookup)",
+    )
+    parser.add_argument("--ct-pages", type=int, default=10, help="maximum on-demand CT result pages")
     return parser
 
 
@@ -155,14 +163,20 @@ def main() -> None:
         parser.error("concurrency must be between 1 and 200")
     if args.timeout <= 0:
         parser.error("timeout must be greater than zero")
+    if not 1 <= args.ct_pages <= 100:
+        parser.error("ct-pages must be between 1 and 100")
 
     if not banner_shown:
         console.print(BANNER, style="bold cyan", highlight=False)
     console.print(f"[dim]Targets:[/dim] {', '.join(domains)}")
-    console.print(f"[dim]Workers:[/dim] {args.concurrency}  [dim]Timeout:[/dim] {args.timeout:g}s\n")
+    console.print(
+        f"[dim]Source:[/dim] {args.source}  [dim]Workers:[/dim] {args.concurrency}  "
+        f"[dim]Timeout:[/dim] {args.timeout:g}s\n"
+    )
     try:
         results = asyncio.run(run_scan(
-            domains, args.concurrency, args.timeout, console, args.show_all, args.discovery_url
+            domains, args.concurrency, args.timeout, console, args.show_all,
+            args.discovery_url, "openct" if args.source == "openct" else "crt-name", args.ct_pages,
         ))
     except KeyboardInterrupt:
         console.print("\n[yellow][!] Scan interrupted[/yellow]")

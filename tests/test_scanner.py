@@ -1,7 +1,8 @@
 import pytest
 
-from subwatch.scanner import extract_title, normalize_domain, parse_crt_response, parse_domains
+from subwatch.scanner import discover, extract_title, normalize_domain, parse_crt_response, parse_domains
 from subwatch.app import result_line, write_reports
+from subwatch.openct import NameRecord
 from subwatch.scanner import ProbeResult
 
 
@@ -35,3 +36,16 @@ def test_json_report_is_opt_in(tmp_path):
 
 def test_title_extraction_is_bounded_and_whitespace_normalized():
     assert extract_title("<HTML><TITLE> Hello   world </TITLE></HTML>") == "Hello world"
+
+
+async def test_openct_discovery_is_on_demand(monkeypatch):
+    async def fake_fetch(apex, max_pages, timeout):
+        assert (apex, max_pages) == ("example.com", 3)
+        return [NameRecord("example.com", "www.example.com", "")]
+
+    monkeypatch.setattr("subwatch.openct.fetch_certspotter", fake_fetch)
+    class Client:
+        class Timeout:
+            read = 4.0
+        timeout = Timeout()
+    assert await discover(Client(), "example.com", source="openct", max_pages=3) == ["www.example.com"]
