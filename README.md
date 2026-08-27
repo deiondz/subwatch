@@ -89,7 +89,45 @@ This is an availability signal—not a vulnerability assessment. A public result
 
 ## Experimental OpenCT index
 
-The `feature/open-ct-enumerator` branch includes `subwatch-ct`, an independent open-source name index that does not call `crt.name`. It ingests public certificate-transparency issuance data, normalizes names into a local SQLite database, and exposes a compatible newline-first search endpoint.
+The `feature/open-ct-enumerator` branch includes `subwatch-ct`, an independent open-source name index that does not call `crt.name`. It can tail RFC 6962 logs directly, ingest historical name datasets, probe DNS, normalize everything into a local append-only SQLite index, and expose a compatible newline-first search endpoint.
+
+List active logs from the official Chrome and Apple programs:
+
+```bash
+subwatch-ct logs --active
+```
+
+Tail active logs directly. The first run begins near the live edge rather than attempting to download billions of historical entries; subsequent runs continue from durable per-log checkpoints:
+
+```bash
+# Ingest one batch from one active log
+subwatch-ct tail --limit-logs 1 --max-batches 1
+
+# Keep reading the selected log until caught up
+subwatch-ct tail --log 'Argon 2026H2' --max-batches 0
+
+# Backfill the most recent 100,000 entries when establishing a checkpoint
+subwatch-ct tail --log Argon --from-tail 100000 --max-batches 0
+```
+
+Each RFC 6962 entry is decoded in memory. Subwatch extracts DNS SANs, determines the eTLD+1 using the Public Suffix List, updates `(apex, subdomain, first_seen)`, and discards the certificate. A checkpoint is committed after every successful batch.
+
+Historical sources are deliberately independent workers. Download gated datasets such as CZDS or Chaos under their own terms, then import them; public URLs and plain local files are both accepted:
+
+```bash
+subwatch-ct import ./chaos-names.txt --source chaos
+subwatch-ct import ./czds-zone.txt --source czds
+subwatch-ct import https://example.net/hagezi-hosts.txt --source hagezi
+subwatch-ct import ./common-crawl-hosts.txt --source commoncrawl
+subwatch-ct import ./retired-log-names.txt --source archive
+```
+
+The importer extracts and normalizes hostnames, commits only name records, and does not retain input documents. A bounded common-name DNS prober can feed the same index:
+
+```bash
+subwatch-ct probe example.com
+subwatch-ct probe example.com --wordlist ./prefixes.txt --concurrency 100
+```
 
 Fetch and query an apex directly:
 
@@ -113,7 +151,11 @@ Point the reachability scanner at your own index:
 subwatch example.com --discovery-url http://127.0.0.1:8787/v1/search
 ```
 
-Data is stored at `~/.local/share/subwatch/openct.sqlite3` by default; override it with `subwatch-ct --db ./openct.sqlite3 ...`. The first implementation uses Cert Spotter's public CT issuance feed as an ingestion source and keeps the earliest certificate `not_before` value observed for each hostname. That timestamp is an approximation of first-seen time, not the CT log's authoritative inclusion timestamp. Use `--cached` to query or serve only locally indexed records.
+Data is stored at `~/.local/share/subwatch/openct.sqlite3` by default; override it with `subwatch-ct --db ./openct.sqlite3 ...`. Direct RFC 6962 ingestion uses the CT entry timestamp as `first_seen`. On-demand API refreshes and `search` still use Cert Spotter as a convenience source and use certificate `not_before`, which is only an approximation. Use `--cached` to query or serve exclusively from data populated by your own workers.
+
+### Current scope
+
+The direct worker implements RFC 6962 `get-sth` and `get-entries`. Static CT data-tile ingestion (Sunlight/Raio/Geomys) requires a separate tile/checkpoint verifier and is not yet enabled; such logs may still expose an RFC 6962 compatibility read endpoint. The importer provides the ingestion boundary for archived and third-party datasets, but it does not circumvent authentication or licensing for CZDS, Chaos, or other gated sources. SQLite is intended for a personal or research index, not a multi-billion-name public service.
 
 ## Development
 

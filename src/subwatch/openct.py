@@ -94,6 +94,14 @@ class Index:
                 )
             """)
             db.execute("CREATE INDEX IF NOT EXISTS names_apex_idx ON names(apex)")
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS checkpoints (
+                    source TEXT PRIMARY KEY,
+                    next_index INTEGER NOT NULL,
+                    observed_tree_size INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
 
     def connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=30)
@@ -120,6 +128,21 @@ class Index:
                 (apex,),
             ).fetchall()
         return [NameRecord(*row) for row in rows]
+
+    def checkpoint(self, source: str) -> int | None:
+        with self.connect() as db:
+            row = db.execute("SELECT next_index FROM checkpoints WHERE source = ?", (source,)).fetchone()
+        return int(row[0]) if row else None
+
+    def set_checkpoint(self, source: str, next_index: int, tree_size: int) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as db:
+            db.execute("""
+                INSERT INTO checkpoints(source, next_index, observed_tree_size, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(source) DO UPDATE SET next_index=excluded.next_index,
+                    observed_tree_size=excluded.observed_tree_size, updated_at=excluded.updated_at
+            """, (source, next_index, tree_size, now))
 
 
 async def refresh(index: Index, apex: str, max_pages: int = 10) -> list[NameRecord]:
@@ -197,6 +220,21 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8787)
     serve.add_argument("--max-pages", type=int, default=10)
     serve.add_argument("--cached", action="store_true", help="never refresh during API requests")
+    logs = sub.add_parser("logs", help="list logs in the official Chrome and Apple programs")
+    logs.add_argument("--active", action="store_true", help="show only qualified/usable logs")
+    tail = sub.add_parser("tail", help="ingest new entries directly from RFC 6962 CT logs")
+    tail.add_argument("--log", action="append", default=[], help="case-insensitive description filter (repeatable)")
+    tail.add_argument("--limit-logs", type=int, default=1)
+    tail.add_argument("--batch-size", type=int, default=256)
+    tail.add_argument("--max-batches", type=int, default=1, help="batches per log per run; 0 means unlimited")
+    tail.add_argument("--from-tail", type=int, default=1000, help="entries to backfill when no checkpoint exists")
+    importer = sub.add_parser("import", help="import historical names from a file or URL")
+    importer.add_argument("location", help="local file or HTTP(S) URL")
+    importer.add_argument("--source", required=True, choices=("archive", "commoncrawl", "czds", "chaos", "hagezi", "custom"))
+    probe = sub.add_parser("probe", help="resolve common hostname prefixes for an apex")
+    probe.add_argument("apex")
+    probe.add_argument("--wordlist", type=Path)
+    probe.add_argument("--concurrency", type=int, default=100)
     return parser
 
 
@@ -206,6 +244,49 @@ def main() -> None:
     if args.command == "search":
         records = index.search(args.apex) if args.cached else asyncio.run(refresh(index, args.apex, args.max_pages))
         print(render(records, args.format, args.dates), end="")
+        return
+    if args.command in {"logs", "tail"}:
+        from .ctlog import ingest_log, load_logs
+
+        async def ct_command() -> None:
+            async with httpx.AsyncClient(timeout=30) as client:
+                logs = await load_logs(client)
+            active = [log for log in logs if log.state in {"usable", "qualified", "readonly"}]
+            if args.command == "logs":
+                for log in active if args.active else logs:
+                    print(f"{log.program:7} {log.state:10} {log.description}  {log.url}")
+                return
+            selected = active
+            if args.log:
+                selected = [log for log in selected if any(term.lower() in log.description.lower() for term in args.log)]
+            selected = selected[:args.limit_logs]
+            if not selected:
+                raise SystemExit("no matching active RFC 6962 logs")
+            for log in selected:
+                print(f"Tailing {log.description} from {log.url}")
+                try:
+                    entries, names = await ingest_log(
+                        index, log, args.batch_size, args.max_batches or None, args.from_tail
+                    )
+                    print(f"  indexed {entries} entries / {names} SAN names")
+                except httpx.HTTPError as exc:
+                    print(f"  skipped: {exc}")
+
+        asyncio.run(ct_command())
+        return
+    if args.command == "import":
+        from .datasets import import_location
+        count = asyncio.run(import_location(index, args.location, args.source))
+        print(f"indexed {count} unique names from {args.source}")
+        return
+    if args.command == "probe":
+        from .datasets import DEFAULT_WORDS, probe_apex
+        words = list(DEFAULT_WORDS)
+        if args.wordlist:
+            words = [line.strip() for line in args.wordlist.read_text().splitlines() if line.strip()]
+        records = asyncio.run(probe_apex(index, args.apex, words, args.concurrency))
+        print(render(records, "text", False), end="")
+        print(f"found {len(records)} names")
         return
     SearchHandler.index = index
     SearchHandler.refresh_on_query = not args.cached
