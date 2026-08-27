@@ -130,8 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="newline discovery API used by the 'api' source",
     )
     parser.add_argument(
-        "--source", choices=("openct", "api"), default="openct",
-        help="CT discovery source (default: openct on-demand lookup)",
+        "--source", choices=("openct", "api"), default="api",
+        help="CT discovery source (default: api, using crt.name)",
+    )
+    parser.add_argument(
+        "--openct", action="store_true",
+        help="use the experimental on-demand OpenCT source instead of crt.name",
     )
     parser.add_argument("--ct-pages", type=int, default=10, help="maximum on-demand CT result pages")
     return parser
@@ -169,14 +173,16 @@ def main() -> None:
     if not banner_shown:
         console.print(BANNER, style="bold cyan", highlight=False)
     console.print(f"[dim]Targets:[/dim] {', '.join(domains)}")
+    selected_source = "openct" if args.openct else args.source
+    source_label = "openct" if selected_source == "openct" else "crt.name"
     console.print(
-        f"[dim]Source:[/dim] {args.source}  [dim]Workers:[/dim] {args.concurrency}  "
+        f"[dim]Source:[/dim] {source_label}  [dim]Workers:[/dim] {args.concurrency}  "
         f"[dim]Timeout:[/dim] {args.timeout:g}s\n"
     )
     try:
         results = asyncio.run(run_scan(
             domains, args.concurrency, args.timeout, console, args.show_all,
-            args.discovery_url, "openct" if args.source == "openct" else "crt-name", args.ct_pages,
+            args.discovery_url, "openct" if selected_source == "openct" else "crt-name", args.ct_pages,
         ))
     except KeyboardInterrupt:
         console.print("\n[yellow][!] Scan interrupted[/yellow]")

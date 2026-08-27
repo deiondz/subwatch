@@ -151,16 +151,22 @@ Point the reachability scanner at your own index:
 subwatch example.com --discovery-url http://127.0.0.1:8787/v1/search
 ```
 
-### On-demand discovery
+### Discovery sources
 
-On this branch, on-demand OpenCT discovery is the default. A normal scan performs a fresh apex-scoped certificate lookup immediately, with no daemon or pre-populated local database required:
+`crt.name` remains the default discovery source:
 
 ```bash
-subwatch example.com
-subwatch example.com --ct-pages 20
+subwatch example.com                 # uses crt.name
 ```
 
-To query your local index API—or any compatible newline endpoint—instead:
+Use the experimental on-demand OpenCT lookup only when explicitly requested:
+
+```bash
+subwatch example.com --openct
+subwatch example.com --openct --ct-pages 20
+```
+
+To query your local index API—or another compatible newline endpoint—instead:
 
 ```bash
 subwatch example.com \
@@ -168,7 +174,7 @@ subwatch example.com \
   --discovery-url http://127.0.0.1:8787/v1/search
 ```
 
-Raw RFC 6962 and Static CT logs are global append-only streams and provide no lookup-by-domain operation. Consequently, an independent raw-log deployment must continuously build the local index; the default on-demand mode uses Cert Spotter's searchable public issuance service. This distinction is intentional and visible in the CLI rather than hidden behind the word “OpenCT.”
+Raw RFC 6962 and Static CT logs are global append-only streams and provide no lookup-by-domain operation. Consequently, an independent raw-log deployment must continuously build the local index; `--openct` uses Cert Spotter's searchable public issuance service for its on-demand lookup. This distinction is intentional and visible in the CLI rather than hidden behind the word “OpenCT.”
 
 Data is stored at `~/.local/share/subwatch/openct.sqlite3` by default; override it with `subwatch-ct --db ./openct.sqlite3 ...`. Direct RFC 6962 ingestion uses the CT entry timestamp as `first_seen`. On-demand API refreshes and `search` still use Cert Spotter as a convenience source and use certificate `not_before`, which is only an approximation. Use `--cached` to query or serve exclusively from data populated by your own workers.
 

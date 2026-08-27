@@ -1,7 +1,7 @@
 import pytest
 
 from subwatch.scanner import discover, extract_title, normalize_domain, parse_crt_response, parse_domains
-from subwatch.app import result_line, write_reports
+from subwatch.app import build_parser, result_line, write_reports
 from subwatch.openct import NameRecord
 from subwatch.scanner import ProbeResult
 
@@ -49,3 +49,11 @@ async def test_openct_discovery_is_on_demand(monkeypatch):
             read = 4.0
         timeout = Timeout()
     assert await discover(Client(), "example.com", source="openct", max_pages=3) == ["www.example.com"]
+
+
+def test_crt_name_is_default_and_openct_is_explicit():
+    parser = build_parser()
+    default = parser.parse_args(["example.com"])
+    explicit = parser.parse_args(["example.com", "--openct"])
+    assert default.source == "api" and not default.openct
+    assert explicit.openct
