@@ -1,4 +1,5 @@
 import json
+from urllib.parse import urljoin
 
 from subwatch.openct import Index, NameRecord, names_from_issuances, next_link, render
 
@@ -31,3 +32,10 @@ def test_render_matches_newline_api_and_json_modes():
 def test_link_header_pagination():
     value = '<https://api.example.test/page2>; rel="next", <https://api.example.test/page4>; rel="last"'
     assert next_link(value) == "https://api.example.test/page2"
+
+
+def test_relative_pagination_link_is_resolved_against_response_url():
+    value = '</v1/issuances?domain=example.com&after=123>; rel="next"'
+    assert urljoin("https://api.certspotter.com/v1/issuances", next_link(value)) == (
+        "https://api.certspotter.com/v1/issuances?domain=example.com&after=123"
+    )

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
 
@@ -71,7 +71,8 @@ async def fetch_certspotter(apex: str, max_pages: int = 10, timeout: float = 20.
             if not isinstance(page, list):
                 raise ValueError("CT source returned a non-list response")
             payload.extend(page)
-            url = next_link(response.headers.get("link"))
+            next_url = next_link(response.headers.get("link"))
+            url = urljoin(str(response.url), next_url) if next_url else None
             if not url:
                 break
     return names_from_issuances(payload, apex)
