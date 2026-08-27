@@ -39,6 +39,21 @@ Subwatch is a fast, keyboard-driven terminal UI for mapping the public-facing we
 
 Subwatch requires Python 3.10 or newer.
 
+For a globally available `subwatch` command, install it with [`pipx`](https://pipx.pypa.io/):
+
+```bash
+pipx install git+https://github.com/deiondz/subwatch.git
+subwatch example.com
+```
+
+The command can then be run from any directory. Upgrade it later with:
+
+```bash
+pipx upgrade subwatch
+```
+
+For development, clone the repository and use an editable virtual-environment install:
+
 ```bash
 git clone https://github.com/deiondz/subwatch.git
 cd subwatch
