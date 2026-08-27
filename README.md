@@ -9,246 +9,88 @@
 
 </div>
 
-Subwatch is a fast, Maigret-style command-line tool for mapping the public-facing web services associated with domains you control. It queries the [`crt.name`](https://crt.name/) certificate search API, cleans and scopes the returned hostnames, resolves DNS, then checks HTTPS and HTTP concurrently.
-
-```text
-[*] example.com: discovered 42 in-scope hosts
-[+] www.example.com  200  https://www.example.com  (184 ms)  Example
-[+] api.example.com  403  https://api.example.com  (207 ms)
-  Checking example.com ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42/42 0:00:03
-
-          Scan summary
-Hosts checked                 42
-Public web services           17
-Closed / no response          20
-DNS failures                   5
-```
-
-## Features
-
-- Certificate-derived discovery through `crt.name/v1/search?apex=<domain>`
-- Multiple apex domains, URL input, IDNs, and newline/comma-separated files
-- Concurrent HTTPS and HTTP reachability checks with redirect following
-- Clear `PUBLIC`, `CLOSED`, `DNS-FAILED`, `NON-PUBLIC-IP`, and `API-ERROR` states
-- Status code, latency, resolved address, final URL, and page-title capture
-- JSON and CSV exports
-- TLS verification, private/reserved address protection, configurable timeouts
-- Maigret-style colored streaming output with a compact progress bar and summary
-
-## How it works
-
-A normal scan has two distinct phases: discovery and reachability checking.
-
-```text
-apex domain
-    │
-    ├─ 1. certificate-name discovery
-    │      crt.name by default
-    │      OpenCT when --openct is supplied
-    │
-    ├─ 2. validation and normalization
-    │      IDN conversion · wildcard cleanup · apex scoping · deduplication
-    │
-    └─ 3. concurrent reachability checks
-           DNS resolution → public-address guard → HTTPS → HTTP fallback
-                                  │
-                                  └─ status · URL · latency · IP · title
-```
-
-### 1. Discover names
-
-Given `example.com`, Subwatch requests certificate-derived names from `https://crt.name/v1/search?apex=example.com`. The endpoint returns one name per line. Subwatch accepts the apex itself and names ending in `.example.com`; malformed or out-of-scope values such as `evil-example.com` are discarded.
-
-Certificate Transparency records show that a certificate was issued for a name. They do not prove that the hostname still exists or that it currently serves a website, which is why Subwatch performs a separate live check.
-
-When `--openct` is supplied, Subwatch performs an on-demand lookup through Cert Spotter instead. To avoid pretending that a third-party lookup is fully independent, this source is always selected explicitly and shown in the output.
-
-### 2. Normalize safely
-
-Hostnames are lowercased, trailing dots and wildcard prefixes are removed, and internationalized names are converted to IDNA ASCII form. Results are validated, scoped to the requested apex, and deduplicated before any network probes begin.
-
-### 3. Check reachability
-
-Each hostname is resolved concurrently, up to the configured worker limit. If it resolves only to private, loopback, link-local, or reserved addresses, Subwatch records `NON-PUBLIC-IP` and does not send an HTTP request. This prevents certificate data from turning the scanner into an accidental private-network requester.
-
-For globally routable addresses, Subwatch requests HTTPS first with certificate verification enabled. If HTTPS fails at the connection or TLS layer, it tries HTTP. Redirects are followed, and any HTTP response—including `401`, `403`, and `500`—counts as `PUBLIC` because a web service answered. The result records the final URL, status code, latency, resolved addresses, and HTML title where available.
-
-### 4. Display and export
-
-Successful services stream to the terminal as they are found. `--show-all` also prints failed probes. At completion, Subwatch shows aggregate counts; `--json` and `--csv` write the complete result set rather than only the lines displayed on screen.
-
-### The independent index
-
-`subwatch-ct` is the optional index-building side of the project. Its RFC 6962 worker reads official CT logs sequentially, parses each certificate in memory, extracts DNS SANs, calculates the correct eTLD+1 with the Public Suffix List, and then discards the certificate. Only these fields persist:
-
-```text
-(apex, subdomain, first_seen)
-```
-
-SQLite also stores a per-log cursor. After each successful batch, the cursor advances, allowing ingestion to resume without replaying processed entries. Historical dataset imports and DNS probing feed the same append-only index. The local server exposes that index through the same newline-oriented `/v1/search?apex=` contract used by the scanner.
+Subwatch is a fast, Maigret-style command-line tool for mapping public-facing web services associated with domains you control.
 
 ## Install
 
-Subwatch requires Python 3.10 or newer.
-
-For a globally available `subwatch` command, install it with [`pipx`](https://pipx.pypa.io/):
+Requires Python 3.10 or newer. Use [`pipx`](https://pipx.pypa.io/) to make `subwatch` available from any directory:
 
 ```bash
 pipx install git+https://github.com/deiondz/subwatch.git
-subwatch example.com
 ```
 
-The command can then be run from any directory. Upgrade it later with:
+Upgrade later with:
 
 ```bash
 pipx upgrade subwatch
 ```
 
-For development, clone the repository and use an editable virtual-environment install:
-
-```bash
-git clone https://github.com/deiondz/subwatch.git
-cd subwatch
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install -e .
-```
-
-Then launch it with one or more domains:
+## Usage
 
 ```bash
 subwatch example.com
-subwatch example.com example.org --concurrency 30 --timeout 7
-subwatch --file domains.txt --output ./reports
 ```
 
-Launching `subwatch` without arguments opens an empty interface where domains can be entered interactively.
+`crt.name` is used for discovery by default. Subwatch cleans the returned hostnames, resolves DNS, checks HTTPS and HTTP concurrently, and streams responding services to the terminal.
 
-By default, Subwatch prints discoveries and public services while keeping failed probes out of the way. Use `--show-all` to print every result, `--json` or `--csv` to save reports, and `Ctrl+C` to stop a scan.
+```text
+[*] example.com: discovered 42 in-scope hosts
+[+] www.example.com  200  https://www.example.com  (184 ms)  Example
+[+] api.example.com  403  https://api.example.com  (207 ms)
+  Complete ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42/42 0:00:03
+```
+
+Useful options:
 
 ```bash
+# Multiple domains
+subwatch example.com example.org
+
+# Domains from a file
+subwatch --file domains.txt
+
+# Print failed probes too
 subwatch example.com --show-all
+
+# Save reports
 subwatch example.com --json --csv --output ./reports
-```
 
-## What the states mean
-
-`PUBLIC` means the hostname resolved to at least one globally routable address and an HTTP(S) request received a response. A `401`, `403`, or `500` still proves that a web server is reachable, so it counts as public.
-
-`CLOSED` means public DNS resolved, but neither HTTPS nor HTTP returned a response before the timeout. `DNS-FAILED` means resolution failed. `NON-PUBLIC-IP` means the hostname resolved only to private or reserved ranges, and Subwatch intentionally did not request it.
-
-This is an availability signal—not a vulnerability assessment. A public result does not mean a service is insecure, and a closed result does not prove that every port is closed.
-
-## Experimental OpenCT index
-
-Subwatch includes `subwatch-ct`, an independent open-source name index that does not call `crt.name`. It can tail RFC 6962 logs directly, ingest historical name datasets, probe DNS, normalize everything into a local append-only SQLite index, and expose a compatible newline-first search endpoint.
-
-List active logs from the official Chrome and Apple programs:
-
-```bash
-subwatch-ct logs --active
-```
-
-Tail active logs directly. The first run begins near the live edge rather than attempting to download billions of historical entries; subsequent runs continue from durable per-log checkpoints:
-
-```bash
-# Ingest one batch from one active log
-subwatch-ct tail --limit-logs 1 --max-batches 1
-
-# Keep reading the selected log until caught up
-subwatch-ct tail --log 'Argon 2026H2' --max-batches 0
-
-# Backfill the most recent 100,000 entries when establishing a checkpoint
-subwatch-ct tail --log Argon --from-tail 100000 --max-batches 0
-```
-
-Each RFC 6962 entry is decoded in memory. Subwatch extracts DNS SANs, determines the eTLD+1 using the Public Suffix List, updates `(apex, subdomain, first_seen)`, and discards the certificate. A checkpoint is committed after every successful batch.
-
-Historical sources are deliberately independent workers. Download gated datasets such as CZDS or Chaos under their own terms, then import them; public URLs and plain local files are both accepted:
-
-```bash
-subwatch-ct import ./chaos-names.txt --source chaos
-subwatch-ct import ./czds-zone.txt --source czds
-subwatch-ct import https://example.net/hagezi-hosts.txt --source hagezi
-subwatch-ct import ./common-crawl-hosts.txt --source commoncrawl
-subwatch-ct import ./retired-log-names.txt --source archive
-```
-
-The importer extracts and normalizes hostnames, commits only name records, and does not retain input documents. A bounded common-name DNS prober can feed the same index:
-
-```bash
-subwatch-ct probe example.com
-subwatch-ct probe example.com --wordlist ./prefixes.txt --concurrency 100
-```
-
-Fetch and query an apex directly:
-
-```bash
-subwatch-ct search example.com
-subwatch-ct search example.com --dates
-subwatch-ct search example.com --format json
-```
-
-Run the local API:
-
-```bash
-subwatch-ct serve --host 127.0.0.1 --port 8787
-curl 'http://127.0.0.1:8787/v1/search?apex=example.com'
-curl 'http://127.0.0.1:8787/v1/search?apex=example.com&format=json&dates=1'
-```
-
-Point the reachability scanner at your own index:
-
-```bash
-subwatch example.com --discovery-url http://127.0.0.1:8787/v1/search
-```
-
-### Discovery sources
-
-`crt.name` remains the default discovery source:
-
-```bash
-subwatch example.com                 # uses crt.name
-```
-
-Use the experimental on-demand OpenCT lookup only when explicitly requested:
-
-```bash
+# Use experimental on-demand OpenCT discovery
 subwatch example.com --openct
-subwatch example.com --openct --ct-pages 20
 ```
 
-To query your local index API—or another compatible newline endpoint—instead:
+Run `subwatch --help` for every option.
 
-```bash
-subwatch example.com \
-  --source api \
-  --discovery-url http://127.0.0.1:8787/v1/search
-```
+## Result states
 
-Raw RFC 6962 and Static CT logs are global append-only streams and provide no lookup-by-domain operation. Consequently, an independent raw-log deployment must continuously build the local index; `--openct` uses Cert Spotter's searchable public issuance service for its on-demand lookup. This distinction is intentional and visible in the CLI rather than hidden behind the word “OpenCT.”
+- `PUBLIC` — a globally routable address returned an HTTP response, including `4xx` or `5xx`.
+- `CLOSED` — public DNS resolved, but HTTPS and HTTP did not respond.
+- `DNS-FAILED` — the hostname did not resolve.
+- `NON-PUBLIC-IP` — only private or reserved addresses resolved, so no request was sent.
+- `API-ERROR` — the discovery source failed.
 
-Data is stored at `~/.local/share/subwatch/openct.sqlite3` by default; override it with `subwatch-ct --db ./openct.sqlite3 ...`. Direct RFC 6962 ingestion uses the CT entry timestamp as `first_seen`. On-demand API refreshes and `search` still use Cert Spotter as a convenience source and use certificate `not_before`, which is only an approximation. Use `--cached` to query or serve exclusively from data populated by your own workers.
+## Documentation
 
-### Current scope
-
-The direct worker implements RFC 6962 `get-sth` and `get-entries`. Static CT data-tile ingestion (Sunlight/Raio/Geomys) requires a separate tile/checkpoint verifier and is not yet enabled; such logs may still expose an RFC 6962 compatibility read endpoint. The importer provides the ingestion boundary for archived and third-party datasets, but it does not circumvent authentication or licensing for CZDS, Chaos, or other gated sources. SQLite is intended for a personal or research index, not a multi-billion-name public service.
+- [How Subwatch works](docs/how-it-works/README.md) — discovery, normalization, safety checks, probing, and reports.
+- [Experimental OpenCT index](docs/openct/README.md) — direct CT ingestion, historical imports, DNS probing, SQLite, and the local API.
 
 ## Development
 
 ```bash
+git clone https://github.com/deiondz/subwatch.git
+cd subwatch
 python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 pytest
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing changes. Automated coding agents should also read [AGENTS.md](AGENTS.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) before proposing changes.
 
 ## Responsible use
 
-Only scan domains you own or have explicit permission to assess. Subwatch makes standard DNS queries and HTTP GET requests; it does not authenticate, scan arbitrary ports, bypass access controls, or exploit vulnerabilities. You are responsible for complying with applicable laws and third-party terms.
+Only scan domains you own or have explicit permission to assess. Subwatch performs DNS resolution and ordinary HTTP requests; it does not authenticate, scan arbitrary ports, bypass access controls, or exploit vulnerabilities.
 
 ## License
 
-Subwatch is available under the [MIT License](LICENSE).
+[MIT](LICENSE)
