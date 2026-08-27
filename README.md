@@ -35,6 +35,58 @@ DNS failures                   5
 - TLS verification, private/reserved address protection, configurable timeouts
 - Maigret-style colored streaming output with a compact progress bar and summary
 
+## How it works
+
+A normal scan has two distinct phases: discovery and reachability checking.
+
+```text
+apex domain
+    │
+    ├─ 1. certificate-name discovery
+    │      crt.name by default
+    │      OpenCT when --openct is supplied
+    │
+    ├─ 2. validation and normalization
+    │      IDN conversion · wildcard cleanup · apex scoping · deduplication
+    │
+    └─ 3. concurrent reachability checks
+           DNS resolution → public-address guard → HTTPS → HTTP fallback
+                                  │
+                                  └─ status · URL · latency · IP · title
+```
+
+### 1. Discover names
+
+Given `example.com`, Subwatch requests certificate-derived names from `https://crt.name/v1/search?apex=example.com`. The endpoint returns one name per line. Subwatch accepts the apex itself and names ending in `.example.com`; malformed or out-of-scope values such as `evil-example.com` are discarded.
+
+Certificate Transparency records show that a certificate was issued for a name. They do not prove that the hostname still exists or that it currently serves a website, which is why Subwatch performs a separate live check.
+
+When `--openct` is supplied, Subwatch performs an on-demand lookup through Cert Spotter instead. To avoid pretending that a third-party lookup is fully independent, this source is always selected explicitly and shown in the output.
+
+### 2. Normalize safely
+
+Hostnames are lowercased, trailing dots and wildcard prefixes are removed, and internationalized names are converted to IDNA ASCII form. Results are validated, scoped to the requested apex, and deduplicated before any network probes begin.
+
+### 3. Check reachability
+
+Each hostname is resolved concurrently, up to the configured worker limit. If it resolves only to private, loopback, link-local, or reserved addresses, Subwatch records `NON-PUBLIC-IP` and does not send an HTTP request. This prevents certificate data from turning the scanner into an accidental private-network requester.
+
+For globally routable addresses, Subwatch requests HTTPS first with certificate verification enabled. If HTTPS fails at the connection or TLS layer, it tries HTTP. Redirects are followed, and any HTTP response—including `401`, `403`, and `500`—counts as `PUBLIC` because a web service answered. The result records the final URL, status code, latency, resolved addresses, and HTML title where available.
+
+### 4. Display and export
+
+Successful services stream to the terminal as they are found. `--show-all` also prints failed probes. At completion, Subwatch shows aggregate counts; `--json` and `--csv` write the complete result set rather than only the lines displayed on screen.
+
+### The independent index
+
+`subwatch-ct` is the optional index-building side of the project. Its RFC 6962 worker reads official CT logs sequentially, parses each certificate in memory, extracts DNS SANs, calculates the correct eTLD+1 with the Public Suffix List, and then discards the certificate. Only these fields persist:
+
+```text
+(apex, subdomain, first_seen)
+```
+
+SQLite also stores a per-log cursor. After each successful batch, the cursor advances, allowing ingestion to resume without replaying processed entries. Historical dataset imports and DNS probing feed the same append-only index. The local server exposes that index through the same newline-oriented `/v1/search?apex=` contract used by the scanner.
+
 ## Install
 
 Subwatch requires Python 3.10 or newer.
@@ -89,7 +141,7 @@ This is an availability signal—not a vulnerability assessment. A public result
 
 ## Experimental OpenCT index
 
-The `feature/open-ct-enumerator` branch includes `subwatch-ct`, an independent open-source name index that does not call `crt.name`. It can tail RFC 6962 logs directly, ingest historical name datasets, probe DNS, normalize everything into a local append-only SQLite index, and expose a compatible newline-first search endpoint.
+Subwatch includes `subwatch-ct`, an independent open-source name index that does not call `crt.name`. It can tail RFC 6962 logs directly, ingest historical name datasets, probe DNS, normalize everything into a local append-only SQLite index, and expose a compatible newline-first search endpoint.
 
 List active logs from the official Chrome and Apple programs:
 
