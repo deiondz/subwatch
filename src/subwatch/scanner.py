@@ -72,8 +72,8 @@ def parse_crt_response(text: str, apex: str) -> list[str]:
     return sorted(hosts, key=lambda h: (h.count("."), h))
 
 
-async def discover(client: httpx.AsyncClient, apex: str) -> list[str]:
-    response = await client.get(API_URL, params={"apex": apex})
+async def discover(client: httpx.AsyncClient, apex: str, api_url: str = API_URL) -> list[str]:
+    response = await client.get(api_url, params={"apex": apex})
     response.raise_for_status()
     return parse_crt_response(response.text, apex)
 
@@ -125,14 +125,14 @@ async def probe(client: httpx.AsyncClient, apex: str, host: str) -> ProbeResult:
     return ProbeResult(apex, host, "closed", ip=", ".join(ips), elapsed_ms=int((perf_counter()-started)*1000), detail="; ".join(errors))
 
 
-async def scan(domains: list[str], concurrency: int, timeout: float, on_discovered, on_result) -> None:
+async def scan(domains: list[str], concurrency: int, timeout: float, on_discovered, on_result, api_url: str = API_URL) -> None:
     limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
     headers = {"User-Agent": "subwatch/0.1 (+authorized asset discovery)"}
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, limits=limits, headers=headers, verify=True) as client:
         semaphore = asyncio.Semaphore(concurrency)
         for apex in domains:
             try:
-                hosts = await discover(client, apex)
+                hosts = await discover(client, apex, api_url)
             except httpx.HTTPError as exc:
                 await on_result(ProbeResult(apex, apex, "api-error", detail=str(exc)))
                 continue

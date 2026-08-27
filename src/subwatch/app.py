@@ -66,7 +66,10 @@ def write_reports(results: list[ProbeResult], output: Path, json_report: bool, c
     return written
 
 
-async def run_scan(domains: list[str], concurrency: int, timeout: float, console: Console, show_all: bool) -> list[ProbeResult]:
+async def run_scan(
+    domains: list[str], concurrency: int, timeout: float, console: Console,
+    show_all: bool, discovery_url: str,
+) -> list[ProbeResult]:
     results: list[ProbeResult] = []
     total = 0
     progress = Progress(
@@ -88,7 +91,7 @@ async def run_scan(domains: list[str], concurrency: int, timeout: float, console
             progress.console.print(result_line(item))
 
     with progress:
-        await scan(domains, concurrency, timeout, discovered, receive)
+        await scan(domains, concurrency, timeout, discovered, receive, discovery_url)
         progress.update(task, description="Complete")
     return results
 
@@ -119,6 +122,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv", action="store_true", help="write a CSV report")
     parser.add_argument("-a", "--show-all", action="store_true", help="print closed and unresolved hosts too")
     parser.add_argument("--no-color", action="store_true", help="disable colored output")
+    parser.add_argument(
+        "--discovery-url", default="https://crt.name/v1/search",
+        help="newline discovery API (use http://127.0.0.1:8787/v1/search for OpenCT)",
+    )
     return parser
 
 
@@ -154,7 +161,9 @@ def main() -> None:
     console.print(f"[dim]Targets:[/dim] {', '.join(domains)}")
     console.print(f"[dim]Workers:[/dim] {args.concurrency}  [dim]Timeout:[/dim] {args.timeout:g}s\n")
     try:
-        results = asyncio.run(run_scan(domains, args.concurrency, args.timeout, console, args.show_all))
+        results = asyncio.run(run_scan(
+            domains, args.concurrency, args.timeout, console, args.show_all, args.discovery_url
+        ))
     except KeyboardInterrupt:
         console.print("\n[yellow][!] Scan interrupted[/yellow]")
         raise SystemExit(130)

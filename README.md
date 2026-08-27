@@ -87,6 +87,34 @@ subwatch example.com --json --csv --output ./reports
 
 This is an availability signal—not a vulnerability assessment. A public result does not mean a service is insecure, and a closed result does not prove that every port is closed.
 
+## Experimental OpenCT index
+
+The `feature/open-ct-enumerator` branch includes `subwatch-ct`, an independent open-source name index that does not call `crt.name`. It ingests public certificate-transparency issuance data, normalizes names into a local SQLite database, and exposes a compatible newline-first search endpoint.
+
+Fetch and query an apex directly:
+
+```bash
+subwatch-ct search example.com
+subwatch-ct search example.com --dates
+subwatch-ct search example.com --format json
+```
+
+Run the local API:
+
+```bash
+subwatch-ct serve --host 127.0.0.1 --port 8787
+curl 'http://127.0.0.1:8787/v1/search?apex=example.com'
+curl 'http://127.0.0.1:8787/v1/search?apex=example.com&format=json&dates=1'
+```
+
+Point the reachability scanner at your own index:
+
+```bash
+subwatch example.com --discovery-url http://127.0.0.1:8787/v1/search
+```
+
+Data is stored at `~/.local/share/subwatch/openct.sqlite3` by default; override it with `subwatch-ct --db ./openct.sqlite3 ...`. The first implementation uses Cert Spotter's public CT issuance feed as an ingestion source and keeps the earliest certificate `not_before` value observed for each hostname. That timestamp is an approximation of first-seen time, not the CT log's authoritative inclusion timestamp. Use `--cached` to query or serve only locally indexed records.
+
 ## Development
 
 ```bash
