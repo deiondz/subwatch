@@ -4,7 +4,7 @@ These instructions apply to the entire repository.
 
 ## Project overview
 
-Subwatch is a Python 3.10+ Textual application. `src/subwatch/scanner.py` owns domain validation, API discovery, DNS resolution, and HTTP probing. `src/subwatch/app.py` owns the terminal interface and exports. Keep network logic independent from Textual so it remains testable.
+Subwatch is a Python 3.10+ Rich command-line application. `src/subwatch/scanner.py` owns domain validation, API discovery, DNS resolution, and HTTP probing. `src/subwatch/app.py` owns streaming terminal output and exports. Keep network logic independent from presentation so it remains testable.
 
 ## Working agreement
 

@@ -6,127 +6,162 @@ import csv
 import json
 from pathlib import Path
 
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal
-from textual.widgets import DataTable, Footer, Header, Input, Label, ProgressBar, Static
-from textual.worker import Worker, WorkerState
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+from rich.text import Text
 
 from .scanner import ProbeResult, parse_domains, scan
 
+BANNER = r"""
+   _____       __                    __       __
+  / ___/__  __/ /_ _      ______ _ / /______/ /_
+  \__ \/ / / / __ \ | /| / / __ `// __/ ___/ __ \
+ ___/ / /_/ / /_/ / |/ |/ / /_/ // /_/ /__/ / / /
+/____/\__,_/_.___/|__/|__/\__,_/ \__/\___/_/ /_/
+"""
 
-class Subwatch(App):
-    TITLE = "SUBWATCH"
-    SUB_TITLE = "certificate discovery · public web reachability"
-    CSS = """
-    Screen { background: #090d16; }
-    #hero { height: 3; padding: 1 2; color: #80f5d2; text-style: bold; }
-    #controls { height: 3; padding: 0 1; }
-    Input { border: tall #31445f; }
-    Input:focus { border: tall #35d6ad; }
-    #stats { height: 3; padding: 1 2; background: #101827; color: #a9bdd6; }
-    ProgressBar { height: 1; margin: 0 2; }
-    DataTable { margin: 1 2; border: round #24354e; }
-    .public { color: #50e3a4; }
-    .closed { color: #f0b65b; }
-    .error { color: #ff6b7a; }
-    """
-    BINDINGS = [("q", "quit", "Quit"), ("r", "run_scan", "Run"), ("e", "export", "Export JSON/CSV"), ("c", "clear", "Clear")]
-
-    def __init__(self, initial: list[str], concurrency: int, timeout: float, output: Path):
-        super().__init__()
-        self.initial = initial
-        self.concurrency = concurrency
-        self.timeout = timeout
-        self.output = output
-        self.results: list[ProbeResult] = []
-        self.total = self.done = 0
-
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Static("◈ SUBWATCH  /  map the public edge", id="hero")
-        with Horizontal(id="controls"):
-            yield Input(value=", ".join(self.initial), placeholder="example.com, example.org", id="domains")
-        yield Label("Ready — enter apex domains and press R", id="stats")
-        yield ProgressBar(total=1, show_eta=False, id="progress")
-        yield DataTable(zebra_stripes=True, cursor_type="row", id="table")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        table.add_columns("STATE", "HOST", "HTTP", "LATENCY", "IP", "TITLE")
-        if self.initial:
-            self.action_run_scan()
-        else:
-            self.query_one(Input).focus()
-
-    def action_clear(self) -> None:
-        self.results.clear(); self.total = self.done = 0
-        self.query_one(DataTable).clear()
-        self.query_one(ProgressBar).update(total=1, progress=0)
-        self.query_one("#stats", Label).update("Ready")
-
-    def action_run_scan(self) -> None:
-        if any(w.is_running for w in self.workers):
-            self.notify("A scan is already running", severity="warning"); return
-        try:
-            domains = parse_domains([self.query_one(Input).value])
-        except ValueError as exc:
-            self.notify(str(exc), severity="error"); return
-        if not domains:
-            self.notify("Enter at least one apex domain", severity="error"); return
-        self.action_clear()
-        self.run_worker(self._scan(domains), name="scan", exit_on_error=False)
-
-    async def _scan(self, domains: list[str]) -> None:
-        async def discovered(apex: str, count: int) -> None:
-            self.total += count
-            self.query_one(ProgressBar).update(total=max(1, self.total))
-            self.query_one("#stats", Label).update(f"Discovered {self.total} hosts · probing {apex}")
-
-        async def result(item: ProbeResult) -> None:
-            self.results.append(item); self.done += 1
-            style = "green" if item.state == "public" else "yellow" if item.state == "closed" else "red"
-            self.query_one(DataTable).add_row(
-                f"[{style}]{item.state.upper()}[/{style}]", item.host,
-                str(item.status or "—"), f"{item.elapsed_ms} ms", item.ip or "—", item.title or item.detail or "—",
-            )
-            self.query_one(ProgressBar).advance(1)
-            public = sum(r.state == "public" for r in self.results)
-            self.query_one("#stats", Label).update(f"{self.done}/{self.total} checked · {public} public · concurrency {self.concurrency}")
-
-        await scan(domains, self.concurrency, self.timeout, discovered, result)
-
-    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-        if event.state == WorkerState.SUCCESS:
-            self.notify(f"Scan complete: {len(self.results)} results")
-        elif event.state == WorkerState.ERROR:
-            self.notify(f"Scan failed: {event.worker.error}", severity="error")
-
-    def action_export(self) -> None:
-        if not self.results:
-            self.notify("Nothing to export", severity="warning"); return
-        self.output.mkdir(parents=True, exist_ok=True)
-        rows = [r.dict() for r in self.results]
-        (self.output / "subwatch-results.json").write_text(json.dumps(rows, indent=2) + "\n")
-        with (self.output / "subwatch-results.csv").open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=rows[0]); writer.writeheader(); writer.writerows(rows)
-        self.notify(f"Exported to {self.output.resolve()}")
+STATE_MARKS = {
+    "public": ("+", "bold green"),
+    "closed": ("-", "yellow"),
+    "dns-failed": ("-", "dim"),
+    "non-public-ip": ("!", "yellow"),
+    "api-error": ("!", "bold red"),
+}
 
 
-def main() -> None:
+def result_line(item: ProbeResult) -> Text:
+    mark, style = STATE_MARKS.get(item.state, ("!", "red"))
+    line = Text.assemble((f"[{mark}] ", style), (item.host, "bold"))
+    if item.state == "public":
+        line.append(f"  {item.status}  ", style="green")
+        line.append(item.url)
+        line.append(f"  ({item.elapsed_ms} ms)", style="dim")
+        if item.title:
+            line.append(f"  {item.title}", style="cyan")
+    else:
+        line.append(f"  {item.state}", style=style)
+        if item.detail:
+            line.append(f"  {item.detail}", style="dim")
+    return line
+
+
+def write_reports(results: list[ProbeResult], output: Path, json_report: bool, csv_report: bool) -> list[Path]:
+    if not results or not (json_report or csv_report):
+        return []
+    output.mkdir(parents=True, exist_ok=True)
+    rows = [result.dict() for result in results]
+    written: list[Path] = []
+    if json_report:
+        target = output / "subwatch-results.json"
+        target.write_text(json.dumps(rows, indent=2) + "\n")
+        written.append(target)
+    if csv_report:
+        target = output / "subwatch-results.csv"
+        with target.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=rows[0])
+            writer.writeheader()
+            writer.writerows(rows)
+        written.append(target)
+    return written
+
+
+async def run_scan(domains: list[str], concurrency: int, timeout: float, console: Console, show_all: bool) -> list[ProbeResult]:
+    results: list[ProbeResult] = []
+    total = 0
+    progress = Progress(
+        SpinnerColumn(style="cyan"), TextColumn("{task.description}"), BarColumn(bar_width=28),
+        MofNCompleteColumn(), TimeElapsedColumn(), console=console,
+    )
+    task = progress.add_task("Discovering certificates", total=None)
+
+    async def discovered(apex: str, count: int) -> None:
+        nonlocal total
+        total += count
+        progress.update(task, total=total, description=f"Checking [bold]{apex}[/bold]")
+        progress.console.print(f"[cyan][*][/cyan] {apex}: discovered [bold]{count}[/bold] in-scope hosts")
+
+    async def receive(item: ProbeResult) -> None:
+        results.append(item)
+        progress.advance(task)
+        if show_all or item.state in {"public", "api-error"}:
+            progress.console.print(result_line(item))
+
+    with progress:
+        await scan(domains, concurrency, timeout, discovered, receive)
+        progress.update(task, description="Complete")
+    return results
+
+
+def print_summary(console: Console, results: list[ProbeResult]) -> None:
+    counts = {state: sum(item.state == state for item in results) for state in STATE_MARKS}
+    table = Table(title="Scan summary", box=None, show_header=False, pad_edge=False)
+    table.add_column(style="dim")
+    table.add_column(justify="right", style="bold")
+    table.add_row("Hosts checked", str(len(results)))
+    table.add_row("Public web services", f"[green]{counts['public']}[/green]")
+    table.add_row("Closed / no response", str(counts["closed"]))
+    table.add_row("DNS failures", str(counts["dns-failed"]))
+    table.add_row("Non-public addresses", str(counts["non-public-ip"]))
+    table.add_row("API errors", f"[red]{counts['api-error']}[/red]")
+    console.print()
+    console.print(table)
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Discover certificate hostnames and test public web reachability")
     parser.add_argument("domains", nargs="*", help="apex domains (or use --file)")
     parser.add_argument("-f", "--file", type=Path, help="newline/comma-separated domains")
     parser.add_argument("-c", "--concurrency", type=int, default=30)
     parser.add_argument("-t", "--timeout", type=float, default=7.0)
-    parser.add_argument("-o", "--output", type=Path, default=Path("."))
+    parser.add_argument("-o", "--output", type=Path, default=Path("."), help="report directory")
+    parser.add_argument("--json", action="store_true", help="write a JSON report")
+    parser.add_argument("--csv", action="store_true", help="write a CSV report")
+    parser.add_argument("-a", "--show-all", action="store_true", help="print closed and unresolved hosts too")
+    parser.add_argument("--no-color", action="store_true", help="disable colored output")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
+    console = Console(no_color=args.no_color)
     raw = list(args.domains)
+    banner_shown = False
     if args.file:
-        raw.append(args.file.read_text())
+        try:
+            raw.append(args.file.read_text())
+        except OSError as exc:
+            parser.error(str(exc))
+    if not raw:
+        console.print(BANNER, style="bold cyan", highlight=False)
+        banner_shown = True
+        value = console.input("[bold]Domain(s)[/bold] (comma-separated): ").strip()
+        if not value:
+            parser.error("at least one domain is required")
+        raw.append(value)
+    try:
+        domains = parse_domains(raw)
+    except ValueError as exc:
+        parser.error(str(exc))
     if not 1 <= args.concurrency <= 200:
         parser.error("concurrency must be between 1 and 200")
-    Subwatch(parse_domains(raw), args.concurrency, args.timeout, args.output).run()
+    if args.timeout <= 0:
+        parser.error("timeout must be greater than zero")
+
+    if not banner_shown:
+        console.print(BANNER, style="bold cyan", highlight=False)
+    console.print(f"[dim]Targets:[/dim] {', '.join(domains)}")
+    console.print(f"[dim]Workers:[/dim] {args.concurrency}  [dim]Timeout:[/dim] {args.timeout:g}s\n")
+    try:
+        results = asyncio.run(run_scan(domains, args.concurrency, args.timeout, console, args.show_all))
+    except KeyboardInterrupt:
+        console.print("\n[yellow][!] Scan interrupted[/yellow]")
+        raise SystemExit(130)
+
+    print_summary(console, results)
+    for path in write_reports(results, args.output, args.json, args.csv):
+        console.print(f"[cyan][*][/cyan] Report written to {path.resolve()}")
 
 
 if __name__ == "__main__":

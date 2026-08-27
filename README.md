@@ -9,19 +9,19 @@
 
 </div>
 
-Subwatch is a fast, keyboard-driven terminal UI for mapping the public-facing web services associated with domains you control. It queries the [`crt.name`](https://crt.name/) certificate search API, cleans and scopes the returned hostnames, resolves DNS, then checks HTTPS and HTTP concurrently.
+Subwatch is a fast, Maigret-style command-line tool for mapping the public-facing web services associated with domains you control. It queries the [`crt.name`](https://crt.name/) certificate search API, cleans and scopes the returned hostnames, resolves DNS, then checks HTTPS and HTTP concurrently.
 
 ```text
- ◈ SUBWATCH  /  map the public edge
- ┌──────────────────────────────────────────────────────────────────────┐
- │ example.com, example.org                                            │
- └──────────────────────────────────────────────────────────────────────┘
-  42/42 checked · 17 public · concurrency 30
+[*] example.com: discovered 42 in-scope hosts
+[+] www.example.com  200  https://www.example.com  (184 ms)  Example
+[+] api.example.com  403  https://api.example.com  (207 ms)
+  Checking example.com ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42/42 0:00:03
 
-  STATE       HOST                    HTTP   LATENCY    IP          TITLE
-  PUBLIC      www.example.com         200    184 ms     93.184…     Example
-  CLOSED      old.example.com         —      7004 ms    192.0…      —
-  DNS-FAILED  removed.example.com     —      12 ms      —           —
+          Scan summary
+Hosts checked                 42
+Public web services           17
+Closed / no response          20
+DNS failures                   5
 ```
 
 ## Features
@@ -33,7 +33,7 @@ Subwatch is a fast, keyboard-driven terminal UI for mapping the public-facing we
 - Status code, latency, resolved address, final URL, and page-title capture
 - JSON and CSV exports
 - TLS verification, private/reserved address protection, configurable timeouts
-- A responsive [Textual](https://textual.textualize.io/) interface
+- Maigret-style colored streaming output with a compact progress bar and summary
 
 ## Install
 
@@ -72,14 +72,12 @@ subwatch --file domains.txt --output ./reports
 
 Launching `subwatch` without arguments opens an empty interface where domains can be entered interactively.
 
-## Controls
+By default, Subwatch prints discoveries and public services while keeping failed probes out of the way. Use `--show-all` to print every result, `--json` or `--csv` to save reports, and `Ctrl+C` to stop a scan.
 
-| Key | Action |
-|---|---|
-| `R` | Run the scan |
-| `C` | Clear results |
-| `E` | Export JSON and CSV |
-| `Q` | Quit |
+```bash
+subwatch example.com --show-all
+subwatch example.com --json --csv --output ./reports
+```
 
 ## What the states mean
 
