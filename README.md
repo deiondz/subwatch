@@ -9,7 +9,7 @@
 
 </div>
 
-Subwatch is a fast, Maigret-style command-line tool for mapping public-facing web services associated with domains you control.
+Subwatch is a fast, command-line tool for mapping public-facing web services associated with domains you control.
 
 ## Install
 
